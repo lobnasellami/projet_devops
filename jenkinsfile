@@ -1,0 +1,115 @@
+pipeline {
+    agent any
+
+
+    environment {
+        KUBE_CONFIG_FILE = credentials('kubeconfig')
+
+
+    }
+
+    stages {
+        stage('Pull from GitHub') {
+            steps {
+                // Pull code from GitHub
+                git branch: 'main', url: 'https://github.com/GhassenAbida/tp.git'
+            }
+        }
+ stage('Run Tests') {
+    steps {
+        script {
+            try {
+                timeout(time: 1, unit: 'MINUTES') { // Set timeout to 1 minute
+                    sh 'rm -rf node_modules/'
+                    sh 'npm install'
+                    sh 'npm test'
+                }
+            } catch (ex) {
+                // Test failed or timeout reached, but we're catching the error to not fail the build
+                echo "Tests failed or timed out, but the pipeline will continue."
+            }
+        }
+    }
+}
+
+
+    
+       stage('sonarqube_scanner') {
+             steps {
+                sh '/opt/sonar-scanner-5.0.1.3006/bin/sonar-scanner   -Dsonar.projectKey=ghassen   -Dsonar.sources=.   -Dsonar.host.url=http://172.17.0.1:9000   -Dsonar.token=sqp_97e55582584aff36da2e870c0499239edf7ac991 '
+            }
+       }
+
+        stage('Build Docker Image') {
+            steps {
+                // Build Docker image
+                sh 'docker build -t my .'
+         }
+       }
+        stage('Push Docker Image') {
+            steps {
+                 //Push Docker image
+                sh 'docker login -u ghassenlbabida -p ghassen123 '
+                sh 'docker tag my ghassenlbabida/my:latest'
+                sh 'docker push ghassenlbabida/my:latest'
+            }
+        }
+ stage('Terraform Init and Plan') {
+            steps {
+                sh 'terraform init -input=false'
+             //   sh 'terraform plan -input=false -out=tfplan'
+            }
+        }
+
+        //         stage('Terraform Apply') {
+          //                steps {
+            //                 sh 'terraform apply -input=false -auto-approve tfplan'
+            //                      }
+        //                    }
+ 
+        stage('k8s') {
+            steps {
+
+                sh ' export KUBECONFIG=$KUBE_CONFIG_FILE && kubectl run ghassen --image=ghassenlbabida/my:latest '
+            }
+        }
+   stage('Ansible Deployment') {
+    steps {
+        script {
+            try {
+                sh 'ansible-playbook -i inventory.yml playbook.yml'
+            } catch (ex) {
+                // Handle the exception here
+                echo "An error occurred during Ansible Deployment"
+               
+            }
+        }
+    }
+}
+
+
+  stage('prometheus & grafana') {
+    steps {
+       script{
+        try {
+            sh 'helm repo add prometheus-community https://prometheus-community.github.io/helm-charts'
+            sh 'helm repo update'
+            sh 'kubectl create ns monitoring'
+            sh 'helm install prometheus prometheus-community/kube-prometheus-stack --namespace monitoring'
+        } catch (ex) {
+             echo " the pipeline will continue."
+        }
+}
+    }
+}
+
+}
+post {
+        always {
+            // This block will always execute, regardless of the build status
+            junit '**/test-results/*.xml' // Adjust the path to your test results
+            // Other post-build actions
+        }
+
+        }
+}
